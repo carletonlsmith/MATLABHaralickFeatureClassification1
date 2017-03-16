@@ -1,0 +1,232 @@
+% Head Tail Model on Training Video
+
+% set the path
+path = 'D:\Carl\Research';
+cd(path)
+
+% XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+% XXXXXXXXXXXXXXXXXXX BELOW ARE HARDCODED VALUES XXXXXXXXXXXXXXXXXXXXXXXX %
+% XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+% feature name info:
+var_names = {'AngularSecondMoment','Contrast','Correlation','Variance','InvDiffMoment','SumAvg','SumVar','SumEnt','Entropy','DiffVariance','DiffEntropy','InfoMeasCorr1','InfomeasCorr2','MaxCorCoef'};
+int_var_names = {'MaxIntensity','MinIntensity','MeanIntensity','StdIntensity','RangeIntensity'};
+response_names = {'head','tail'};
+
+% path and file name info:
+frame_folder_name = 'Movie_Frames_From N2_NF4'; % create this before running FrameExtractor()
+cropped_folder = 'D:\Carl\Research\input\cropped_n2_nf4'; % CreateCroppedImages
+CustomGLCM_path = 'D:\Carl\Research'; % this is the location of the CustomGLCM function
+vid_name = 'N2_NF4.avi'; % the video you're processing
+[folder, baseFileName, extentions] = fileparts(fullfile('D:\Carl\\Research\\',vid_name));
+% create the below folder before running code
+normedFrames_Folder = fullfile(sprintf('%s/NormedFrames %s', folder, baseFileName)); % CreateCroppedImages
+folder = pwd; % InitialzeFirstFrame
+
+% initialization constants for first frame
+head_direction = 'north'; % InitialzeFirstFrame: which direction the head points in 1st frame
+
+training_rows = 1402; % how many rows to initialize "InitializeDataSets()"
+textureData_cols = 14;% how many cols to initialize "InitializeDataSets()"
+intensityData_cols = 5; % how many cols (5 features for intensity)
+head_label = 0; % head label in the data set
+tail_label = 1;% tail label in the data set
+numFramesToExtract = 2000; % how many frames you want to extract from vid
+
+% pixel intensity ranges - Don't change!!
+background_min = 226; % No touchie! Min intensity for background in 1st frame
+background_max = 240; % No touchie! Max intensity for background in 1st frame
+background_range = 14; % No touchie! range of background ints in first frame
+background_ranges = [226,240,14]; % No touchie! the ranges, just put in an array together
+foreground_ranges = [97,218,121]; % No touchie! the ranges, just put in an array together
+base_frame_ranges = [97,252,155]; % No touchie! This is the minimum of ENTIRE frame, not just bg and fg
+    % base_frame_range is diff from foreground/bg because backgound range
+    % taken from a small clean subregion of the background, not entire rng
+stdDevRange = [28.56 34.82];
+meanPxRange = [147 157];
+kurtPxRange = [1.7554 2.5624];
+
+% parameters for haralick features
+angles = [0,45,90,135]; % GenerateHaralickFeatures
+displacement = 1; % GenerateHaralickFeatures
+
+% XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX %
+% XXXXXXXXXXXXXXXXXXX ABOVE ARE HARDCODED VALUES XXXXXXXXXXXXXXXXXXXXXXXX %
+% XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX %
+
+%% Create empty data sets for Features
+
+% Texture data set: InitializeDataSets(rows,columns,class_label)
+head_data_train = InitializeDataSets(training_rows,textureData_cols,head_label);
+tail_data_train = InitializeDataSets(training_rows,textureData_cols,tail_label);
+
+% Intensity data set: InitializeDataSets(rows,columns,class_label)
+head_intense_train = InitializeDataSets(training_rows,intensityData_cols,head_label);
+tail_intense_train = InitializeDataSets(training_rows,intensityData_cols,tail_label);
+
+%% Extract frames from an avi video of worm
+
+output_folder = VideoFrameExtractor(numFramesToExtract,vid_name,frame_folder_name)
+
+
+%% Normalize the frames to be within the same range as N2_nf4
+% these are saved to 'normedFrames_Folder' path
+    % frame_folder_name: input frames path
+    % normedFrames_Folder: output path for normed frames
+    % base_frame_ranges: normalize values into this range
+    % foreground_ranges: normalize
+ForegroundBackgroundNorm(frame_folder_name,normedFrames_Folder, base_frame_ranges ,foreground_ranges, background_ranges);
+
+%% Find the average min and max pixel size of a worm body
+% min_worm_px_sz: must be calibrated for each video
+% max_worm_px_sz: must be calibrated for each video
+% [min_worm_px_sz,max_worm_px_sz] = FindWormPxRange(normedFrames_Folder);
+
+%% Initialize the first frame
+
+% previous_head/previous_tail are coordinates of head and tail in frame0001
+% normedFrames_Folder: must be calibrated for each video
+% min_worm_px_sz: the low end of number of worm px on the worm body
+% max_worm_px_sz: the high end of number of worm px on the worm body
+% head_direction: where the head points in 1st frame (set in hardcode section)
+[previous_head, previous_tail] = InitializeFirstFrame(normedFrames_Folder,stdDevRange,meanPxRange,head_direction);
+
+
+%% Create cropped images
+CreateCroppedImages(normedFrames_Folder,stdDevRange,kurtPxRange,previous_head,previous_tail,training_rows,cropped_folder);
+
+%% Generate Features - Haralick and Intensity
+
+% head data feature generation
+[head_data_train,head_intense_train,bad_frame_idx_head,bad_frames_head,frame_idx_head] = GenerateHaralickFeatures(cropped_folder,CustomGLCM_path,'head',displacement,angles);
+cd(path)
+
+% tail data feature generation
+[tail_data_train,tail_intense_train,bad_frame_idx_tail,bad_frames_tail,frame_idx_tail] = GenerateHaralickFeatures(cropped_folder,CustomGLCM_path,'tail',displacement,angles);
+cd(path)
+
+%% Identify bad rows
+[all_rows_to_delete] = FindRowsToDelete( head_data_train,tail_data_train );
+
+%% Remove all bad rows
+
+% Remove bad tail image data:
+tail_data_train(all_rows_to_delete,:) = [];
+tail_intense_train(all_rows_to_delete,:) = [];
+
+% Remove bad head image data:
+head_data_train(all_rows_to_delete,:) = [];
+head_intense_train(all_rows_to_delete,:) = [];
+
+% %% Mapping of bad frames to original frames
+% 
+% get the cropped image names
+cd(cropped_folder)
+head_images = dir('GOOD_head*.png');
+tail_images = dir('GOOD_tail*.png');
+
+% create idx mapper dictionary
+cd(path)
+[head_idx_map] = MapRecordsToImages(all_rows_to_delete,head_data_train,head_images);
+[tail_idx_map] = MapRecordsToImages(all_rows_to_delete,tail_data_train,tail_images);
+
+%% Combine the datasets into one and normalize
+% the name of the frames
+allFrame_names = [frame_idx_head;frame_idx_tail]; % the name of the frames
+
+% Haralick Feature Data
+all_data_haralick = [head_data_train;tail_data_train]; % all data
+
+% separate data from label
+haralick_feat_data = all_data_haralick(:,1:14);
+haralick_labels = all_data_haralick(:,15);
+
+% Intensity feature data
+all_data_intensity = [head_intense_train;tail_intense_train];
+
+% separate data from label
+intensity_feat_data = all_data_intensity(:,1:5);
+intensity_labels = all_data_intensity(:,6);
+
+% normalize feat data (min/max) normalization
+haralick_feat_data = ColumnNormalizer(haralick_feat_data);
+intensity_feat_data = ColumnNormalizer(intensity_feat_data);
+
+%% Split into training and testing
+
+% get random logical indices
+n = numel(haralick_feat_data(:,1));
+idxTrn = false(n,1);
+idxTrn(randsample(n,round(0.7*n))) = true; % Training set logical indices
+idxVal = idxTrn == false;         % Validation set logical indices
+
+%% Map the Validation set indices to the indices of the entire data set
+% find the indices of the data set that correspond to the rows in
+% validation set
+ValDataSetIdx = find(idxVal);
+% enumerate validation set for idx mapping purposes
+EnumerateVal = linspace(1,size(find(idxVal),1),size(find(idxVal),1)).';
+% create misclassified idx mapping container
+Val2AllIdxMapper = containers.Map(EnumerateVal,ValDataSetIdx);
+
+%% Train the models
+
+% run optimization for both data sets
+Haralick_Tree_Mdl_optimal = fitctree(haralick_feat_data(idxTrn,:),haralick_labels(idxTrn),'OptimizeHyperparameters','auto','PredictorNames',var_names);
+Intensity_Tree_Mdl_optimal = fitctree(intensity_feat_data(idxTrn,:),intensity_labels(idxTrn),'OptimizeHyperparameters','auto','PredictorNames',int_var_names);
+
+% haralick models
+[Haralick_Tree_Mdl1,tree_predH1,confMatH1,HaraM1_Acc,HaralickWrongM1] = RunDTModels( haralick_feat_data,haralick_labels,idxTrn,idxVal,5,var_names,allFrame_names);
+[Haralick_Tree_Mdl2,tree_predH2,confMatH2,HaraM2_Acc,HaralickWrongM2] = RunDTModels( haralick_feat_data,haralick_labels,idxTrn,idxVal,10,var_names,allFrame_names);
+[Haralick_Tree_Mdl3,tree_predH3,confMatH3,HaraM3_Acc,HaralickWrongM3] = RunDTModels( haralick_feat_data,haralick_labels,idxTrn,idxVal,15,var_names,allFrame_names);
+[Haralick_Tree_Mdl4,tree_predH4,confMatH4,HaraM4_Acc,HaralickWrongM4] = RunDTModels( haralick_feat_data,haralick_labels,idxTrn,idxVal,20,var_names,allFrame_names);
+[Haralick_Tree_Mdl5,tree_predH5,confMatH5,HaraM5_Acc,HaralickWrongM5] = RunDTModels( haralick_feat_data,haralick_labels,idxTrn,idxVal,25,var_names,allFrame_names);
+[Haralick_Tree_Mdl6,tree_predH6,confMatH6,HaraM6_Acc,HaralickWrongM6] = RunDTModels( haralick_feat_data,haralick_labels,idxTrn,idxVal,30,var_names,allFrame_names);
+
+% intensity models
+[Intensity_Tree_Mdl,tree_predI1,confMatI1,Intense_Acc1,IntenseWrongM1] = RunDTModels( intensity_feat_data,intensity_labels,idxTrn,idxVal,5,int_var_names,allFrame_names);
+[Intensity_Tree_Md2,tree_predI2,confMatI2,Intense_Acc2,IntenseWrongM2] = RunDTModels( intensity_feat_data,intensity_labels,idxTrn,idxVal,10,int_var_names,allFrame_names);
+[Intensity_Tree_Md3,tree_predI3,confMatI3,Intense_Acc3,IntenseWrongM3] = RunDTModels( intensity_feat_data,intensity_labels,idxTrn,idxVal,15,int_var_names,allFrame_names);
+[Intensity_Tree_Md4,tree_predI4,confMatI4,Intense_Acc4,IntenseWrongM4] = RunDTModels( intensity_feat_data,intensity_labels,idxTrn,idxVal,20,int_var_names,allFrame_names);
+[Intensity_Tree_Md5,tree_predI5,confMatI5,Intense_Acc5,IntenseWrongM5] = RunDTModels( intensity_feat_data,intensity_labels,idxTrn,idxVal,25,int_var_names,allFrame_names);
+[Intensity_Tree_Md6,tree_predI6,confMatI6,Intense_Acc6,IntenseWrongM6] = RunDTModels( intensity_feat_data,intensity_labels,idxTrn,idxVal,30,int_var_names,allFrame_names);
+
+%% Find the misclassified frames and output the segmentation super imposed
+
+
+[ DSA,DSB,DSC,DSD,HT_breakdown,McNemarArray,M1vM2_ConfMat ] = MisclassifiedAnalysis( Val2AllIdxMapper,head_idx_map,tree_predH1,tree_predI1,haralick_labels,normedFrames_Folder,'A',stdDevRange);
+
+
+
+
+
+
+
+
+
+
+%% Map the Validation set indices to the indices of the entire data set
+% find the indices of the data set that correspond to the rows in
+% validation set
+ValDataSetIdx = find(idxVal);
+
+% enumerate validation set for idx mapping purposes
+EnumerateVal = linspace(1,size(find(idxVal),1),size(find(idxVal),1)).';
+
+% create misclassified idx mapping container
+Val2AllIdxMapper = containers.Map(EnumerateVal,ValDataSetIdx);
+
+% get frame names for training and testing
+TrnFrame_names = allFrame_names(idxTrn); % training
+TestFrame_names = allFrame_names(idxVal);
+
+%% Map incorrect cases to frames
+wrong_intensity_idx0 = find(tree_predI(:,1)~=intensity_labels);
+wrong_haralick_idx0 = find(tree_predH(:,1)~=haralick_labels);
+
+[head_right,head_right_idx,both_wrong_idx_head] = M1right_M2wrong(intensity_labels,tree_predH(:,1),tree_predI(:,1),'head');
+[tail_right,tail_right_idx,both_wrong_idx_tail] = M1right_M2wrong(intensity_labels,tree_predH(:,1),tree_predI(:,1),'tail');
+
+%% Significance Test
+
+[p_val,t_stat,McNemar_mat] = McNemarSignificance(intensity_labels,tree_predH(:,1),tree_predI(:,1));
